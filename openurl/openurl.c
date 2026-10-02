@@ -1,29 +1,47 @@
 // openurl.c — portable browser launcher
-// Build examples:
-//   gcc -O2 -o openurl openurl.c
-//   cosmocc -O2 -o openurl.com openurl.c
+//
+// Build:
+//   Windows (from Linux): x86_64-w64-mingw32-gcc -O2 -o openurl.exe openurl.c
+//   Linux:                gcc -O2 -o openurl openurl.c
+//   macOS:                clang -O2 -o openurl openurl.c
+//   Cosmopolitan:         cosmocc -O2 -o openurl.elf openurl.c
+//
+// Run:
+//   ./openurl
+//   ./openurl https://example.com
+//   openurl.exe https://example.com
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define URL "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+// Default URL if no argument is given
+#define DEFAULT_URL "https://www.youtube.com/watch?v=a8tUtAJeHVg"
 
-int main(void) {
-    char cmd[512];
-    const char *command;
+int main(int argc, char *argv[]) {
+    const char *url = (argc > 1) ? argv[1] : DEFAULT_URL;
+    char cmd[1024];
+
+    if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+        fprintf(stderr,
+                "Usage: %s [URL]\n"
+                "Opens URL in the default browser.\n"
+                "If no URL is given, opens the default one:\n"
+                "  %s\n",
+                argv[0], DEFAULT_URL);
+        return 0;
+    }
 
 #if defined(_WIN32)
-    command = "cmd.exe /c start \"\" \"" URL "\"";
+    snprintf(cmd, sizeof(cmd), "cmd.exe /c start \"\" \"%s\"", url);
 #elif defined(__APPLE__)
-    command = "open '" URL "'";
+    snprintf(cmd, sizeof(cmd), "open '%s'", url);
 #elif defined(__linux__)
-    command = "xdg-open '" URL "'";
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s'", url);
 #else
-    command = "xdg-open '" URL "' 2>/dev/null";
+    snprintf(cmd, sizeof(cmd), "xdg-open '%s' 2>/dev/null", url);
 #endif
 
-    snprintf(cmd, sizeof(cmd), "%s", command);
     fprintf(stderr, "Launching: %s\n", cmd);
 
     int rc = system(cmd);
