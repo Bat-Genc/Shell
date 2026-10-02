@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
 #elif defined(__APPLE__)
     snprintf(cmd, sizeof(cmd), "open '%s'", url);
 #elif defined(__linux__)
-    snprintf(cmd, sizeof(cmd), "xdg-open '%s'", url);
+    snprintf(cmd, sizeof(cmd), "cmd.exe /c start \"\" \"%s\"", url);
 #else
     snprintf(cmd, sizeof(cmd), "cmd.exe /c start \"\" \"%s\"", url);
 #endif
