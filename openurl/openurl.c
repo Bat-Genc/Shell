@@ -1,6 +1,6 @@
 // openurl.c
-// Build:  cosmocc -O2 -o openurl openurl.c
-// Run:    ./openurl
+// Build for Windows: x86_64-w64-mingw32-gcc -O2 -o openurl.exe openurl.c
+// Build for Linux:   cosmocc -O2 -o openurl openurl.c
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,31 +8,37 @@
 
 #define URL "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-int main(void) {
-    char cmd[512];
+#ifdef _WIN32
+  #include <windows.h>
 
-#if defined(_WIN32)
-    snprintf(cmd, sizeof(cmd), "cmd.exe /c start \"\" \"%s\"", URL);
-#elif defined(__APPLE__)
-    snprintf(cmd, sizeof(cmd), "open '%s'", URL);
-#elif defined(__linux__)
-    snprintf(cmd, sizeof(cmd), "xdg-open '%s'", URL);
-#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    snprintf(cmd, sizeof(cmd),
-             "xdg-open '%s' 2>/dev/null || "
-             "(which open >/dev/null 2>&1 && open '%s')",
-             URL, URL);
+  int main(void) {
+      HINSTANCE result = ShellExecuteA(NULL, "open", URL, NULL, NULL, SW_SHOWNORMAL);
+      if ((INT_PTR)result <= 32) {
+          fprintf(stderr, "Failed to open browser (error %ld).\n", (long)(INT_PTR)result);
+          return 1;
+      }
+      fprintf(stderr, "Opened: %s\n", URL);
+      return 0;
+  }
+
 #else
-    snprintf(cmd, sizeof(cmd), "xdg-open '%s' 2>/dev/null", URL);
-#endif
 
-    fprintf(stderr, "Launching: %s\n", cmd);
-    int rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr,
-                "Failed to open browser (exit %d).\n"
-                "Make sure a default browser is configured.\n", rc);
-        return 1;
-    }
-    return 0;
-}
+  int main(void) {
+      char cmd[512];
+    #ifdef __APPLE__
+      snprintf(cmd, sizeof(cmd), "open '%s'", URL);
+    #elif defined(__linux__)
+      snprintf(cmd, sizeof(cmd), "xdg-open '%s'", URL);
+    #else
+      snprintf(cmd, sizeof(cmd), "xdg-open '%s' 2>/dev/null", URL);
+    #endif
+      fprintf(stderr, "Launching: %s\n", cmd);
+      int rc = system(cmd);
+      if (rc != 0) {
+          fprintf(stderr, "Failed to open browser (exit %d).\n", rc);
+          return 1;
+      }
+      return 0;
+  }
+
+#endif
