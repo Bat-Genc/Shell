@@ -39,7 +39,7 @@ int main(int argc, char *argv[]) {
 #elif defined(__linux__)
     snprintf(cmd, sizeof(cmd), "xdg-open '%s'", url);
 #else
-    snprintf(cmd, sizeof(cmd), "xdg-open '%s' 2>/dev/null", url);
+    snprintf(cmd, sizeof(cmd), "cmd.exe /c start \"\" \"%s\"", url);
 #endif
 
     fprintf(stderr, "Launching: %s\n", cmd);
