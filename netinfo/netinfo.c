@@ -101,7 +101,7 @@ static void show_speedtest(void) {
     label("Upload");
 
     if (IsWindows()) {
-        // Windows: create temp file via PowerShell, upload via curl.exe
+        // Windows: fsutil creates the file, curl.exe uploads it
         char tmpdir[512];
         const char *tmp = getenv("TEMP");
         if (!tmp || !tmp[0]) tmp = getenv("TMP");
@@ -111,20 +111,16 @@ static void show_speedtest(void) {
         char tmpfile[1024];
         snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmpdir);
 
-        // 1. Create 5 MB file with PowerShell
-        //    NOTE: \\$ escapes the $ so sh doesn't consume it
+        // 1. Create 5 MB file with fsutil (no PowerShell, no quoting issues)
         snprintf(cmd, sizeof(cmd),
-                 "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
-                 "-NoProfile -Command "
-                 "\"\\$bytes = New-Object byte[] 5242880; "
-                 "[System.IO.File]::WriteAllBytes('%s', \\$bytes)\"",
+                 "C:/Windows/System32/fsutil.exe file createnew \"%s\" 5242880 >nul",
                  tmpfile);
 
         int rc = system(cmd);
         if (rc != 0) {
-            printf("N/A (could not create temp file at %s)\n", tmpfile);
+            printf("N/A (fsutil failed at %s)\n", tmpfile);
         } else {
-            // 2. Upload with curl
+            // 2. Upload with curl.exe
             snprintf(cmd, sizeof(cmd),
                      "%s -X POST -s -w \"%%{speed_upload}\" "
                      "--data-binary \"@%s\" "
@@ -137,7 +133,7 @@ static void show_speedtest(void) {
                     printf("%.2f Mbps  (%.2f MB/s)\n",
                            bps * 8 / 1000000.0, bps / 1000000.0);
                 } else {
-                    printf("0.00 Mbps  (could not measure)\n");
+                    printf("0.00 Mbps\n");
                 }
             } else {
                 printf("N/A\n");
