@@ -57,115 +57,81 @@ static double measure_speed(const char *cmd) {
     return atof(buf);
 }
 
+// ===== SPEED TEST =====
 static void show_speedtest(void) {
     printf("  ----------------------------------------\n");
     printf("  Speed Test (Cloudflare)\n");
     printf("  ----------------------------------------\n");
 
-    // ===== 1. DOWNLOAD (10 MB) =====
+#ifdef _WIN32
+    const char *curl = "C:/Windows/System32/curl.exe";
+    const char *null_dev = "NUL";
+#else
+    const char *curl = "curl";
+    const char *null_dev = "/dev/null";
+#endif
+
+    char cmd[2048];
+    char buf[256];
+
+    // ===== Download test (25 MB) =====
     label("Download");
-    fflush(stdout);
+    snprintf(cmd, sizeof(cmd),
+             "%s -o %s -s -w \"%%{speed_download}\" "
+             "\"https://speed.cloudflare.com/__down?bytes=25000000\"",
+             curl, null_dev);
 
-#ifdef _WIN32
-    const char *dl_cmd =
-        "C:/Windows/System32/curl.exe -s -o NUL -w \"%{speed_download}\" "
-        "--max-time 30 "
-        "https://speed.cloudflare.com/__down?bytes=10000000";
-#else
-    const char *dl_cmd =
-        "curl -s -o /dev/null -w \"%{speed_download}\" "
-        "--max-time 30 "
-        "https://speed.cloudflare.com/__down?bytes=10000000";
-#endif
-
-    double dl_bps = measure_speed(dl_cmd);
-    if (dl_bps > 0) {
-        double mbps = (dl_bps * 8) / 1000000.0;
-        printf("%8.2f Mbps  (%.2f MB/s)\n", mbps, dl_bps / 1000000.0);
+    if (run(cmd, buf, sizeof(buf)) == 0) {
+        double bytes_per_sec = atof(buf);
+        double mbps = bytes_per_sec * 8 / 1000000.0;
+        double mbs = bytes_per_sec / 1000000.0;
+        printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
     } else {
-        printf("N/A (curl missing or timeout)\n");
+        printf("N/A\n");
     }
 
-    // ===== 2. UPLOAD (5 MB) =====
+    // ===== Upload test (5 MB) =====
     label("Upload");
-    fflush(stdout);
-
-    double ul_bps = -1;
-
 #ifdef _WIN32
-    // Windows: random data -> temp file -> curl upload
-    const char *ul_cmd =
-        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
-        "-NoProfile -Command "
-        "\"$bytes = New-Object byte[] 5000000; "
-        "(New-Object Random).NextBytes($bytes); "
-        "$tmp = [System.IO.Path]::GetTempFileName(); "
-        "[System.IO.File]::WriteAllBytes($tmp, $bytes); "
-        "$speed = (& C:/Windows/System32/curl.exe -s -o NUL -w '%{speed_upload}' "
-        "--max-time 30 -X POST --data-binary '@'+$tmp "
-        "https://speed.cloudflare.com/__up); "
-        "Write-Host $speed; "
-        "Remove-Item $tmp -Force\"";
+    snprintf(cmd, sizeof(cmd),
+             "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+             "-NoProfile -Command "
+             "\"$data = New-Object byte[] 5242880; "
+             "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
+             "Invoke-WebRequest -Uri 'https://speed.cloudflare.com/__up' "
+             "-Method POST -Body $data -UseBasicParsing | Out-Null; "
+             "$sw.Stop(); "
+             "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
 #else
-    const char *ul_cmd =
-        "dd if=/dev/zero bs=1048576 count=5 2>/dev/null | "
-        "curl -s -o /dev/null -w \"%{speed_upload}\" "
-        "--max-time 30 -X POST --data-binary @- "
-        "https://speed.cloudflare.com/__up";
+    snprintf(cmd, sizeof(cmd),
+             "dd if=/dev/zero bs=1M count=5 2>/dev/null | "
+             "%s -X POST -s -w \"%%{speed_upload}\" "
+             "--data-binary @- \"https://speed.cloudflare.com/__up\"",
+             curl);
 #endif
 
-    ul_bps = measure_speed(ul_cmd);
-    if (ul_bps > 0) {
-        double mbps = (ul_bps * 8) / 1000000.0;
-        printf("%8.2f Mbps  (%.2f MB/s)\n", mbps, ul_bps / 1000000.0);
+    if (run(cmd, buf, sizeof(buf)) == 0) {
+        double bytes_per_sec = atof(buf);
+        double mbps = bytes_per_sec * 8 / 1000000.0;
+        double mbs = bytes_per_sec / 1000000.0;
+        printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
     } else {
-        printf("N/A (upload failed)\n");
+        printf("N/A\n");
     }
 
-    // ===== 3. PING (latency) =====
+    // ===== Ping test =====
     label("Ping");
-    fflush(stdout);
+    snprintf(cmd, sizeof(cmd),
+             "%s -o %s -s -w \"%%{time_total}\" "
+             "\"https://speed.cloudflare.com/__down?bytes=1\"",
+             curl, null_dev);
 
-#ifdef _WIN32
-    FILE *pf = popen(
-        "C:/Windows/System32/ping.exe -n 1 -w 5000 speed.cloudflare.com",
-        "r");
-    if (pf) {
-        char line[512];
-        double ms = -1;
-        while (fgets(line, sizeof(line), pf)) {
-            char *p = strstr(line, "time=");
-            if (!p) p = strstr(line, "time<");
-            if (p) {
-                p = strchr(p, '=');
-                if (p) {
-                    p++;
-                    if (*p == '<') p++;
-                    ms = atof(p);
-                    break;
-                }
-            }
-        }
-        pclose(pf);
-        if (ms >= 0) printf("%8.2f ms\n", ms);
-        else         printf("N/A\n");
+    if (run(cmd, buf, sizeof(buf)) == 0) {
+        double t = atof(buf);
+        printf("%.2f ms\n", t * 1000);
     } else {
         printf("N/A\n");
     }
-#else
-    const char *ping_cmd =
-        "curl -s -o /dev/null -w \"%{time_total}\" "
-        "--max-time 10 "
-        "https://speed.cloudflare.com/__down?bytes=1";
-    double t = measure_speed(ping_cmd);
-    if (t > 0) {
-        printf("%8.2f ms\n", t * 1000.0);
-    } else {
-        printf("N/A\n");
-    }
-#endif
-
-    printf("  ----------------------------------------\n");
 }
 
 // ===== Determine active connection type (Linux) =====
