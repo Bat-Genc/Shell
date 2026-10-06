@@ -5,6 +5,8 @@
 //   ./netinfo.com              show info (password hidden)
 //   sudo ./netinfo.com -p      show WiFi password (Linux)
 //   netinfo.com -p             show WiFi password (Windows, run as admin)
+//   ./netinfo.com -s           run internet speed test
+//   sudo ./netinfo.com -p -s   show password + speed test
 //   ./netinfo.com -h           help
 
 #include <stdio.h>
@@ -44,6 +46,74 @@ static void show(const char *lbl, const char *cmd) {
     else printf("N/A\n");
 }
 
+// ===== Speed test (needs curl) =====
+static double measure_speed(const char *cmd) {
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return -1;
+    char buf[64];
+    if (!fgets(buf, sizeof(buf), fp)) { pclose(fp); return -1; }
+    pclose(fp);
+    return atof(buf);
+}
+
+static void show_speedtest(void) {
+    printf("  ----------------------------------------\n");
+    printf("  Speed Test (Cloudflare)\n");
+    printf("  ----------------------------------------\n");
+
+#ifdef _WIN32
+    const char *dl_cmd =
+        "C:/Windows/System32/curl.exe -s -o NUL -w \"%{speed_download}\" "
+        "--max-time 30 "
+        "https://speed.cloudflare.com/__down?bytes=10000000";
+#else
+    const char *dl_cmd =
+        "curl -s -o /dev/null -w \"%{speed_download}\" "
+        "--max-time 30 "
+        "https://speed.cloudflare.com/__down?bytes=10000000";
+#endif
+
+    // ===== Download =====
+    label("Download");
+    fflush(stdout);
+    double dl_bps = measure_speed(dl_cmd);
+    if (dl_bps > 0) {
+        printf("%.2f Mbps\n", (dl_bps * 8) / 1000000.0);
+    } else {
+        printf("N/A (curl missing or timeout)\n");
+    }
+
+    // ===== Upload =====
+    label("Upload");
+    fflush(stdout);
+
+#ifdef _WIN32
+    // Windows: use a temp file since /dev/zero doesn't exist
+    const char *ul_cmd =
+        "C:/Windows/System32/curl.exe -s -o NUL -w \"%{speed_upload}\" "
+        "--max-time 30 "
+        "-X POST --data-binary \"12345678901234567890123456789012345678901234567890"
+        "12345678901234567890123456789012345678901234567890"
+        "12345678901234567890123456789012345678901234567890"
+        "12345678901234567890123456789012345678901234567890\" "
+        "https://speed.cloudflare.com/__up";
+#else
+    const char *ul_cmd =
+        "dd if=/dev/zero bs=1048576 count=5 2>/dev/null | "
+        "curl -s -o /dev/null -w \"%{speed_upload}\" "
+        "--max-time 30 "
+        "-X POST --data-binary @- "
+        "https://speed.cloudflare.com/__up";
+#endif
+
+    double ul_bps = measure_speed(ul_cmd);
+    if (ul_bps > 0) {
+        printf("%.2f Mbps\n", (ul_bps * 8) / 1000000.0);
+    } else {
+        printf("N/A (curl missing or timeout)\n");
+    }
+}
+
 // ===== Determine active connection type (Linux) =====
 // Returns: 0 = wifi, 1 = ethernet, -1 = unknown
 static int get_active_type(char *iface, size_t n) {
@@ -65,7 +135,7 @@ static int get_active_type(char *iface, size_t n) {
                 iface[n-1] = '\0';
                 trim(iface);
             }
-            result = 0;  // WiFi
+            result = 0;
             break;
         }
         if (strncmp(line, "802-3-ethernet", 14) == 0 ||
@@ -76,7 +146,7 @@ static int get_active_type(char *iface, size_t n) {
                 iface[n-1] = '\0';
                 trim(iface);
             }
-            result = 1;  // Ethernet
+            result = 1;
             break;
         }
     }
@@ -111,7 +181,6 @@ static void show_windows_ethernet(void);
 
 // ===== WINDOWS =====
 static void show_windows(int show_password) {
-    // ===== 1. IP + MAC + Gateway + DNS from ipconfig =====
     FILE *fp = popen("C:/Windows/System32/ipconfig.exe /all", "r");
     if (fp) {
         char line[1024];
@@ -151,7 +220,6 @@ static void show_windows(int show_password) {
 
     printf("  ----------------------------------------\n");
 
-    // ===== 2. WiFi info from netsh =====
     fp = popen("C:/Windows/System32/netsh.exe wlan show interfaces 2>nul", "r");
     if (!fp) {
         show_windows_ethernet();
@@ -206,7 +274,6 @@ static void show_windows(int show_password) {
     pclose(fp);
 
     if (ssid[0]) {
-        // ===== WiFi =====
         label("Connection");    printf("WiFi\n");
         label("SSID");          printf("%s\n", ssid);
         if (bssid[0])    { label("BSSID");          printf("%s\n", bssid); }
@@ -255,7 +322,6 @@ static void show_windows(int show_password) {
             printf("**********   (use -p to show)\n");
         }
     } else {
-        // ===== Ethernet =====
         show_windows_ethernet();
     }
 }
@@ -265,7 +331,6 @@ static void show_windows_ethernet(void) {
     label("Connection");
     printf("Ethernet\n");
 
-    // Link Speed от WMIC
     FILE *fp = popen(
         "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get Speed /value 2>nul",
         "r");
@@ -283,7 +348,6 @@ static void show_windows_ethernet(void) {
         pclose(fp);
     }
 
-    // Duplex
     fp = popen(
         "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get FullDuplex /value 2>nul",
         "r");
@@ -300,7 +364,6 @@ static void show_windows_ethernet(void) {
         pclose(fp);
     }
 
-    // MTU от netsh
     show("MTU",
          "C:/Windows/System32/netsh.exe interface ipv4 show subinterfaces 2>nul | "
          "findstr /R \"^ *[0-9]\" | awk \"NR==2{print \\$1}\"");
@@ -308,7 +371,6 @@ static void show_windows_ethernet(void) {
 
 // ===== LINUX =====
 static void show_linux(int show_password, const char *prog) {
-    // Common: IP + MAC
     show("IPv4 Address",
          "ip -4 -br addr show up scope global | grep -v 'docker\\|veth\\|lo' | awk '{print $3}' | cut -d/ -f1");
     show("IPv6 Address",
@@ -322,7 +384,6 @@ static void show_linux(int show_password, const char *prog) {
     int conn_type = get_active_type(iface, sizeof(iface));
 
     if (conn_type == 0) {
-        // ===== WiFi =====
         char buf[2048] = "";
         int ok = -1;
         FILE *fp = popen("LANG=C /usr/bin/nmcli -t -f IN-USE,SSID,SIGNAL,RATE,CHAN,FREQ,SECURITY dev wifi 2>/dev/null", "r");
@@ -410,7 +471,6 @@ static void show_linux(int show_password, const char *prog) {
         }
 
     } else if (conn_type == 1) {
-        // ===== Ethernet =====
         char cmd[256];
         label("Connection");  printf("Ethernet (%s)\n", iface);
 
@@ -447,16 +507,20 @@ static void show_linux(int show_password, const char *prog) {
 
 int main(int argc, char *argv[]) {
     int show_password = 0;
+    int show_speed    = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             printf("Usage: %s [OPTIONS]\n\n", argv[0]);
             printf("  -p, --password   Show WiFi password (needs admin/sudo)\n");
+            printf("  -s, --speed      Run internet speed test (needs curl)\n");
             printf("  -h, --help       Show this help\n");
             return 0;
         }
         if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--password"))
             show_password = 1;
+        if (!strcmp(argv[i], "-s") || !strcmp(argv[i], "--speed"))
+            show_speed = 1;
     }
 
     const char *platform = "Unknown";
@@ -475,6 +539,10 @@ int main(int argc, char *argv[]) {
     } else if (IsXnu()) {
         show("IPv4 Address", "ifconfig | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}'");
         show("Hardware Address", "ifconfig | grep ether | awk '{print toupper($2)}'");
+    }
+
+    if (show_speed) {
+        show_speedtest();
     }
 
     printf("\n");
