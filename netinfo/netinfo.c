@@ -63,7 +63,7 @@ static void show_speedtest(void) {
         null_dev = "/dev/null";
     }
 
-    char cmd[2048];
+    char cmd[4096];
     char buf[256];
 
     // ===== Download test (25 MB) =====
@@ -74,10 +74,8 @@ static void show_speedtest(void) {
              curl, null_dev);
 
     if (run(cmd, buf, sizeof(buf)) == 0) {
-        double bytes_per_sec = atof(buf);
-        double mbps = bytes_per_sec * 8 / 1000000.0;
-        double mbs  = bytes_per_sec / 1000000.0;
-        printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
+        double bps = atof(buf);
+        printf("%.2f Mbps  (%.2f MB/s)\n", bps * 8 / 1000000.0, bps / 1000000.0);
     } else {
         printf("N/A\n");
     }
@@ -86,30 +84,64 @@ static void show_speedtest(void) {
     label("Upload");
 
     if (IsWindows()) {
+        // Windows: 1) create temp file, 2) upload with curl, 3) delete
+        char tmpfile[512];
+        const char *tmp = getenv("TEMP");
+        if (!tmp || !tmp[0]) tmp = getenv("TMP");
+        if (!tmp || !tmp[0]) tmp = "C:/Windows/Temp";
+        snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmp);
+        for (char *p = tmpfile; *p; p++) if (*p == '\\') *p = '/';
+
+        // 1. Create 5 MB file with PowerShell (fast .NET API)
         snprintf(cmd, sizeof(cmd),
                  "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
                  "-NoProfile -Command "
                  "\"$data = New-Object byte[] 5242880; "
-                 "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
-                 "Invoke-WebRequest -Uri 'https://speed.cloudflare.com/__up' "
-                 "-Method POST -Body $data -UseBasicParsing | Out-Null; "
-                 "$sw.Stop(); "
-                 "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
+                 "[System.IO.File]::WriteAllBytes('%s', $data)\"",
+                 tmpfile);
+        int rc = system(cmd);
+        if (rc != 0) {
+            printf("N/A (could not create temp file)\n");
+        } else {
+            // 2. Upload with curl
+            snprintf(cmd, sizeof(cmd),
+                     "%s -X POST -s -w \"%%{speed_upload}\" "
+                     "--data-binary \"@%s\" "
+                     "\"https://speed.cloudflare.com/__up\"",
+                     curl, tmpfile);
+
+            if (run(cmd, buf, sizeof(buf)) == 0) {
+                double bps = atof(buf);
+                if (bps > 0.0) {
+                    printf("%.2f Mbps  (%.2f MB/s)\n",
+                           bps * 8 / 1000000.0, bps / 1000000.0);
+                } else {
+                    printf("0.00 Mbps  (upload was too fast to measure)\n");
+                }
+            } else {
+                printf("N/A\n");
+            }
+
+            // 3. Delete temp file
+            snprintf(cmd, sizeof(cmd),
+                     "C:/Windows/System32/cmd.exe /c del /f /q \"%s\" 2>nul",
+                     tmpfile);
+            system(cmd);
+        }
     } else {
+        // Linux: dd | curl
         snprintf(cmd, sizeof(cmd),
                  "dd if=/dev/zero bs=1M count=5 2>/dev/null | "
                  "%s -X POST -s -w \"%%{speed_upload}\" "
                  "--data-binary @- \"https://speed.cloudflare.com/__up\"",
                  curl);
-    }
 
-    if (run(cmd, buf, sizeof(buf)) == 0) {
-        double bytes_per_sec = atof(buf);
-        double mbps = bytes_per_sec * 8 / 1000000.0;
-        double mbs  = bytes_per_sec / 1000000.0;
-        printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
-    } else {
-        printf("N/A\n");
+        if (run(cmd, buf, sizeof(buf)) == 0) {
+            double bps = atof(buf);
+            printf("%.2f Mbps  (%.2f MB/s)\n", bps * 8 / 1000000.0, bps / 1000000.0);
+        } else {
+            printf("N/A\n");
+        }
     }
 
     // ===== Ping test =====
