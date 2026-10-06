@@ -55,10 +55,8 @@ static void fix_win_path(const char *in, char *out, size_t n) {
     } else {
         snprintf(out, n, "%s", in);
     }
-    // Uppercase drive letter
     if (out[0] >= 'a' && out[0] <= 'z' && out[1] == ':')
         out[0] -= 32;
-    // Replace backslashes with forward slashes
     for (char *p = out; *p; p++)
         if (*p == '\\') *p = '/';
 }
@@ -101,7 +99,8 @@ static void show_speedtest(void) {
     label("Upload");
 
     if (IsWindows()) {
-        // Windows: fsutil creates the file, curl.exe uploads it
+        // Windows: download a 5 MB file with curl.exe, then upload it back
+        // This avoids fsutil / PowerShell quoting problems entirely.
         char tmpdir[512];
         const char *tmp = getenv("TEMP");
         if (!tmp || !tmp[0]) tmp = getenv("TMP");
@@ -111,16 +110,17 @@ static void show_speedtest(void) {
         char tmpfile[1024];
         snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmpdir);
 
-        // 1. Create 5 MB file with fsutil (no PowerShell, no quoting issues)
+        // 1. Download 5 MB (creates the file)
         snprintf(cmd, sizeof(cmd),
-                 "C:/Windows/System32/fsutil.exe file createnew \"%s\" 5242880 >nul",
-                 tmpfile);
-
+                 "%s -o \"%s\" -s "
+                 "\"https://speed.cloudflare.com/__down?bytes=5242880\"",
+                 curl, tmpfile);
         int rc = system(cmd);
+
         if (rc != 0) {
-            printf("N/A (fsutil failed at %s)\n", tmpfile);
+            printf("N/A (could not create temp file)\n");
         } else {
-            // 2. Upload with curl.exe
+            // 2. Upload it back
             snprintf(cmd, sizeof(cmd),
                      "%s -X POST -s -w \"%%{speed_upload}\" "
                      "--data-binary \"@%s\" "
