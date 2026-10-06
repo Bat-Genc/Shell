@@ -40,8 +40,13 @@ static void show(const char *lbl, const char *cmd) {
 
 // ===== WINDOWS =====
 static void show_windows(void) {
-    FILE *fp = popen("C:\\Windows\\System32\\ipconfig.exe /all", "r");
-    if (!fp) { printf("  (failed to run ipconfig)\n"); return; }
+    // Forward slashes work on Windows too!
+    FILE *fp = popen("C:/Windows/System32/ipconfig.exe /all", "r");
+    if (!fp) {
+        printf("  (failed to run ipconfig)\n");
+        return;
+    }
+
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
         const char *keys[] = {
@@ -49,7 +54,10 @@ static void show_windows(void) {
             "Default Gateway", "DNS Servers", NULL
         };
         for (int i = 0; keys[i]; i++) {
-            if (strstr(line, keys[i])) { printf("  %s", line); break; }
+            if (strstr(line, keys[i])) {
+                printf("  %s", line);
+                break;
+            }
         }
     }
     pclose(fp);
