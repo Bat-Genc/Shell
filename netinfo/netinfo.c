@@ -46,6 +46,23 @@ static void show(const char *lbl, const char *cmd) {
     else printf("N/A\n");
 }
 
+// ===== Fix Cosmopolitan Windows paths =====
+// Cosmopolitan returns paths like "/C/Users/..." - convert to "C:/Users/..."
+static void fix_win_path(const char *in, char *out, size_t n) {
+    if (in[0] == '/' && in[1] && in[2] == '/' &&
+        ((in[1] >= 'A' && in[1] <= 'Z') || (in[1] >= 'a' && in[1] <= 'z'))) {
+        snprintf(out, n, "%c:%s", in[1], in + 2);
+    } else {
+        snprintf(out, n, "%s", in);
+    }
+    // Uppercase drive letter
+    if (out[0] >= 'a' && out[0] <= 'z' && out[1] == ':')
+        out[0] -= 32;
+    // Replace backslashes with forward slashes
+    for (char *p = out; *p; p++)
+        if (*p == '\\') *p = '/';
+}
+
 // ===== SPEED TEST (runtime OS detection) =====
 static void show_speedtest(void) {
     printf("  ----------------------------------------\n");
@@ -84,29 +101,53 @@ static void show_speedtest(void) {
     label("Upload");
 
     if (IsWindows()) {
-        // Windows: use .NET HttpClient directly (no temp file!)
-        snprintf(cmd, sizeof(cmd),
-            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
-            "-NoProfile -Command "
-            "\"$data = New-Object byte[] 5242880; "
-            "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
-            "$client = New-Object System.Net.Http.HttpClient; "
-            "$content = New-Object System.Net.Http.ByteArrayContent($data); "
-            "$content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new('application/octet-stream'); "
-            "$client.PostAsync('https://speed.cloudflare.com/__up', $content).Wait(); "
-            "$sw.Stop(); "
-            "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
+        // Windows: create temp file via PowerShell, upload via curl.exe
+        char tmpdir[512];
+        const char *tmp = getenv("TEMP");
+        if (!tmp || !tmp[0]) tmp = getenv("TMP");
+        if (!tmp || !tmp[0]) tmp = "C:/Windows/Temp";
+        fix_win_path(tmp, tmpdir, sizeof(tmpdir));
 
-        if (run(cmd, buf, sizeof(buf)) == 0) {
-            double bps = atof(buf);
-            if (bps > 0.0) {
-                printf("%.2f Mbps  (%.2f MB/s)\n",
-                       bps * 8 / 1000000.0, bps / 1000000.0);
-            } else {
-                printf("N/A (invalid response: '%s')\n", buf);
-            }
+        char tmpfile[1024];
+        snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmpdir);
+
+        // 1. Create 5 MB file with PowerShell
+        //    NOTE: \\$ escapes the $ so sh doesn't consume it
+        snprintf(cmd, sizeof(cmd),
+                 "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+                 "-NoProfile -Command "
+                 "\"\\$bytes = New-Object byte[] 5242880; "
+                 "[System.IO.File]::WriteAllBytes('%s', \\$bytes)\"",
+                 tmpfile);
+
+        int rc = system(cmd);
+        if (rc != 0) {
+            printf("N/A (could not create temp file at %s)\n", tmpfile);
         } else {
-            printf("N/A\n");
+            // 2. Upload with curl
+            snprintf(cmd, sizeof(cmd),
+                     "%s -X POST -s -w \"%%{speed_upload}\" "
+                     "--data-binary \"@%s\" "
+                     "\"https://speed.cloudflare.com/__up\"",
+                     curl, tmpfile);
+
+            if (run(cmd, buf, sizeof(buf)) == 0) {
+                double bps = atof(buf);
+                if (bps > 0.0) {
+                    printf("%.2f Mbps  (%.2f MB/s)\n",
+                           bps * 8 / 1000000.0, bps / 1000000.0);
+                } else {
+                    printf("0.00 Mbps  (could not measure)\n");
+                }
+            } else {
+                printf("N/A\n");
+            }
+
+            // 3. Delete temp file
+            snprintf(cmd, sizeof(cmd),
+                     "C:/Windows/System32/cmd.exe /c del /f /q \"%s\" 2>nul",
+                     tmpfile);
+            system(cmd);
         }
     } else {
         // Linux: dd | curl
@@ -358,7 +399,7 @@ static void show_windows_ethernet(void) {
     FILE *fp = popen(
         "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
         "-NoProfile -Command "
-        "\"Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | "
+        "\"Get-NetAdapter | Where-Object {\\$_.Status -eq 'Up'} | "
         "Select-Object -First 1 -Property Name,LinkSpeed,MtuSize,MacAddress | "
         "Format-List\"",
         "r");
