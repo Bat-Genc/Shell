@@ -53,6 +53,7 @@ static double measure_speed(const char *cmd) {
     char buf[64];
     if (!fgets(buf, sizeof(buf), fp)) { pclose(fp); return -1; }
     pclose(fp);
+    trim(buf);
     return atof(buf);
 }
 
@@ -92,15 +93,18 @@ static void show_speedtest(void) {
     double ul_bps = -1;
 
 #ifdef _WIN32
-    // Windows: create temp file with PowerShell, then upload
+    // Windows: random data -> temp file -> curl upload
     const char *ul_cmd =
         "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
         "-NoProfile -Command "
-        "\"$tmp = [System.IO.Path]::GetTempFileName(); "
-        "fsutil file createnew $tmp 5000000 | Out-Null; "
-        "& C:/Windows/System32/curl.exe -s -o NUL -w '%{speed_upload}' "
+        "\"$bytes = New-Object byte[] 5000000; "
+        "(New-Object Random).NextBytes($bytes); "
+        "$tmp = [System.IO.Path]::GetTempFileName(); "
+        "[System.IO.File]::WriteAllBytes($tmp, $bytes); "
+        "$speed = (& C:/Windows/System32/curl.exe -s -o NUL -w '%{speed_upload}' "
         "--max-time 30 -X POST --data-binary '@'+$tmp "
-        "https://speed.cloudflare.com/__up; "
+        "https://speed.cloudflare.com/__up); "
+        "Write-Host $speed; "
         "Remove-Item $tmp -Force\"";
 #else
     const char *ul_cmd =
@@ -123,7 +127,6 @@ static void show_speedtest(void) {
     fflush(stdout);
 
 #ifdef _WIN32
-    // Windows: use ping.exe
     FILE *pf = popen(
         "C:/Windows/System32/ping.exe -n 1 -w 5000 speed.cloudflare.com",
         "r");
@@ -131,7 +134,6 @@ static void show_speedtest(void) {
         char line[512];
         double ms = -1;
         while (fgets(line, sizeof(line), pf)) {
-            // Find "time=XXms" or "time<1ms"
             char *p = strstr(line, "time=");
             if (!p) p = strstr(line, "time<");
             if (p) {
@@ -151,7 +153,6 @@ static void show_speedtest(void) {
         printf("N/A\n");
     }
 #else
-    // Linux/macOS: use curl for latency (single small request)
     const char *ping_cmd =
         "curl -s -o /dev/null -w \"%{time_total}\" "
         "--max-time 10 "
@@ -426,24 +427,6 @@ static void show_windows_ethernet(void) {
         if (speed[0]) { label("Link Speed"); printf("%s\n", speed); }
         if (mtu[0])   { label("MTU");        printf("%s\n", mtu); }
         if (mac[0])   { label("MAC");        printf("%s\n", mac); }
-    }
-
-    // Duplex (fallback via wmic)
-    fp = popen(
-        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" "
-        "get FullDuplex /value 2>nul",
-        "r");
-    if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            char *p = strstr(line, "FullDuplex=");
-            if (p) {
-                label("Duplex");
-                printf("%s\n", (atoi(p + 11) == 1) ? "Full" : "Half");
-                break;
-            }
-        }
-        pclose(fp);
     }
 }
 
