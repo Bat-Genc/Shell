@@ -106,9 +106,12 @@ static int get_wifi_password(char *psk, size_t n) {
     return psk[0] ? 0 : -1;
 }
 
+// ===== Forward declaration =====
+static void show_windows_ethernet(void);
+
 // ===== WINDOWS =====
 static void show_windows(int show_password) {
-    // 1. IP + MAC + Gateway + DNS from ipconfig
+    // ===== 1. IP + MAC + Gateway + DNS from ipconfig =====
     FILE *fp = popen("C:/Windows/System32/ipconfig.exe /all", "r");
     if (fp) {
         char line[1024];
@@ -118,15 +121,27 @@ static void show_windows(int show_password) {
 
             const char *keys[] = {
                 "Host Name", "IPv4 Address", "IPv6 Address",
+                "Link-local IPv6 Address",
                 "Physical Address", "Default Gateway", "DNS Servers",
                 "DHCP Server", "Subnet Mask", NULL
             };
             for (int i = 0; keys[i]; i++) {
                 if (strncmp(p, keys[i], strlen(keys[i])) == 0 && strchr(p, ':')) {
-                    size_t len = strlen(p);
-                    while (len > 0 && (p[len-1] == '\n' || p[len-1] == '\r'))
-                        p[--len] = '\0';
-                    printf("  %s\n", p);
+                    char *colon = strchr(p, ':');
+                    *colon = '\0';
+                    char *key = p;
+                    char *val = colon + 1;
+                    while (*val == ' ') val++;
+
+                    size_t len = strlen(val);
+                    while (len > 0 && (val[len-1] == '\n' || val[len-1] == '\r'))
+                        val[--len] = '\0';
+
+                    len = strlen(key);
+                    while (len > 0 && (key[len-1] == ' ' || key[len-1] == '\t'))
+                        key[--len] = '\0';
+
+                    printf("  %-22s%s\n", key, val);
                     break;
                 }
             }
@@ -136,11 +151,10 @@ static void show_windows(int show_password) {
 
     printf("  ----------------------------------------\n");
 
-    // 2. WiFi info from netsh
-    fp = popen("C:/Windows/System32/netsh.exe wlan show interfaces", "r");
+    // ===== 2. WiFi info from netsh =====
+    fp = popen("C:/Windows/System32/netsh.exe wlan show interfaces 2>nul", "r");
     if (!fp) {
-        label("Connection");
-        printf("Ethernet (no netsh)\n");
+        show_windows_ethernet();
         return;
     }
 
@@ -192,6 +206,7 @@ static void show_windows(int show_password) {
     pclose(fp);
 
     if (ssid[0]) {
+        // ===== WiFi =====
         label("Connection");    printf("WiFi\n");
         label("SSID");          printf("%s\n", ssid);
         if (bssid[0])    { label("BSSID");          printf("%s\n", bssid); }
@@ -240,9 +255,55 @@ static void show_windows(int show_password) {
             printf("**********   (use -p to show)\n");
         }
     } else {
-        label("Connection");
-        printf("Ethernet (or no WiFi)\n");
+        // ===== Ethernet =====
+        show_windows_ethernet();
     }
+}
+
+// ===== Windows Ethernet details =====
+static void show_windows_ethernet(void) {
+    label("Connection");
+    printf("Ethernet\n");
+
+    // Link Speed от WMIC
+    FILE *fp = popen(
+        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get Speed /value 2>nul",
+        "r");
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            char *p = strstr(line, "Speed=");
+            if (p) {
+                long long bps = atoll(p + 6);
+                label("Link Speed");
+                printf("%lld Mbps\n", bps / 1000000);
+                break;
+            }
+        }
+        pclose(fp);
+    }
+
+    // Duplex
+    fp = popen(
+        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get FullDuplex /value 2>nul",
+        "r");
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            char *p = strstr(line, "FullDuplex=");
+            if (p) {
+                label("Duplex");
+                printf("%s\n", (atoi(p + 11) == 1) ? "Full" : "Half");
+                break;
+            }
+        }
+        pclose(fp);
+    }
+
+    // MTU от netsh
+    show("MTU",
+         "C:/Windows/System32/netsh.exe interface ipv4 show subinterfaces 2>nul | "
+         "findstr /R \"^ *[0-9]\" | awk \"NR==2{print \\$1}\"");
 }
 
 // ===== LINUX =====
