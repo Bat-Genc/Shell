@@ -84,49 +84,29 @@ static void show_speedtest(void) {
     label("Upload");
 
     if (IsWindows()) {
-        // Windows: 1) create temp file, 2) upload with curl, 3) delete
-        char tmpfile[512];
-        const char *tmp = getenv("TEMP");
-        if (!tmp || !tmp[0]) tmp = getenv("TMP");
-        if (!tmp || !tmp[0]) tmp = "C:/Windows/Temp";
-        snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmp);
-        for (char *p = tmpfile; *p; p++) if (*p == '\\') *p = '/';
-
-        // 1. Create 5 MB file with PowerShell (fast .NET API)
+        // Windows: use .NET HttpClient directly (no temp file!)
         snprintf(cmd, sizeof(cmd),
-                 "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
-                 "-NoProfile -Command "
-                 "\"$data = New-Object byte[] 5242880; "
-                 "[System.IO.File]::WriteAllBytes('%s', $data)\"",
-                 tmpfile);
-        int rc = system(cmd);
-        if (rc != 0) {
-            printf("N/A (could not create temp file)\n");
-        } else {
-            // 2. Upload with curl
-            snprintf(cmd, sizeof(cmd),
-                     "%s -X POST -s -w \"%%{speed_upload}\" "
-                     "--data-binary \"@%s\" "
-                     "\"https://speed.cloudflare.com/__up\"",
-                     curl, tmpfile);
+            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+            "-NoProfile -Command "
+            "\"$data = New-Object byte[] 5242880; "
+            "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
+            "$client = New-Object System.Net.Http.HttpClient; "
+            "$content = New-Object System.Net.Http.ByteArrayContent($data); "
+            "$content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::new('application/octet-stream'); "
+            "$client.PostAsync('https://speed.cloudflare.com/__up', $content).Wait(); "
+            "$sw.Stop(); "
+            "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
 
-            if (run(cmd, buf, sizeof(buf)) == 0) {
-                double bps = atof(buf);
-                if (bps > 0.0) {
-                    printf("%.2f Mbps  (%.2f MB/s)\n",
-                           bps * 8 / 1000000.0, bps / 1000000.0);
-                } else {
-                    printf("0.00 Mbps  (upload was too fast to measure)\n");
-                }
+        if (run(cmd, buf, sizeof(buf)) == 0) {
+            double bps = atof(buf);
+            if (bps > 0.0) {
+                printf("%.2f Mbps  (%.2f MB/s)\n",
+                       bps * 8 / 1000000.0, bps / 1000000.0);
             } else {
-                printf("N/A\n");
+                printf("N/A (invalid response: '%s')\n", buf);
             }
-
-            // 3. Delete temp file
-            snprintf(cmd, sizeof(cmd),
-                     "C:/Windows/System32/cmd.exe /c del /f /q \"%s\" 2>nul",
-                     tmpfile);
-            system(cmd);
+        } else {
+            printf("N/A\n");
         }
     } else {
         // Linux: dd | curl
