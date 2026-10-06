@@ -46,30 +46,22 @@ static void show(const char *lbl, const char *cmd) {
     else printf("N/A\n");
 }
 
-// ===== Speed test helpers =====
-static double measure_speed(const char *cmd) {
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return -1;
-    char buf[64];
-    if (!fgets(buf, sizeof(buf), fp)) { pclose(fp); return -1; }
-    pclose(fp);
-    trim(buf);
-    return atof(buf);
-}
-
-// ===== SPEED TEST =====
+// ===== SPEED TEST (runtime OS detection) =====
 static void show_speedtest(void) {
     printf("  ----------------------------------------\n");
     printf("  Speed Test (Cloudflare)\n");
     printf("  ----------------------------------------\n");
 
-#ifdef _WIN32
-    const char *curl = "C:/Windows/System32/curl.exe";
-    const char *null_dev = "NUL";
-#else
-    const char *curl = "curl";
-    const char *null_dev = "/dev/null";
-#endif
+    const char *curl;
+    const char *null_dev;
+
+    if (IsWindows()) {
+        curl = "C:/Windows/System32/curl.exe";
+        null_dev = "NUL";
+    } else {
+        curl = "curl";
+        null_dev = "/dev/null";
+    }
 
     char cmd[2048];
     char buf[256];
@@ -84,7 +76,7 @@ static void show_speedtest(void) {
     if (run(cmd, buf, sizeof(buf)) == 0) {
         double bytes_per_sec = atof(buf);
         double mbps = bytes_per_sec * 8 / 1000000.0;
-        double mbs = bytes_per_sec / 1000000.0;
+        double mbs  = bytes_per_sec / 1000000.0;
         printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
     } else {
         printf("N/A\n");
@@ -92,28 +84,29 @@ static void show_speedtest(void) {
 
     // ===== Upload test (5 MB) =====
     label("Upload");
-#ifdef _WIN32
-    snprintf(cmd, sizeof(cmd),
-             "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
-             "-NoProfile -Command "
-             "\"$data = New-Object byte[] 5242880; "
-             "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
-             "Invoke-WebRequest -Uri 'https://speed.cloudflare.com/__up' "
-             "-Method POST -Body $data -UseBasicParsing | Out-Null; "
-             "$sw.Stop(); "
-             "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
-#else
-    snprintf(cmd, sizeof(cmd),
-             "dd if=/dev/zero bs=1M count=5 2>/dev/null | "
-             "%s -X POST -s -w \"%%{speed_upload}\" "
-             "--data-binary @- \"https://speed.cloudflare.com/__up\"",
-             curl);
-#endif
+
+    if (IsWindows()) {
+        snprintf(cmd, sizeof(cmd),
+                 "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+                 "-NoProfile -Command "
+                 "\"$data = New-Object byte[] 5242880; "
+                 "$sw = [System.Diagnostics.Stopwatch]::StartNew(); "
+                 "Invoke-WebRequest -Uri 'https://speed.cloudflare.com/__up' "
+                 "-Method POST -Body $data -UseBasicParsing | Out-Null; "
+                 "$sw.Stop(); "
+                 "Write-Host (5242880 / $sw.Elapsed.TotalSeconds)\"");
+    } else {
+        snprintf(cmd, sizeof(cmd),
+                 "dd if=/dev/zero bs=1M count=5 2>/dev/null | "
+                 "%s -X POST -s -w \"%%{speed_upload}\" "
+                 "--data-binary @- \"https://speed.cloudflare.com/__up\"",
+                 curl);
+    }
 
     if (run(cmd, buf, sizeof(buf)) == 0) {
         double bytes_per_sec = atof(buf);
         double mbps = bytes_per_sec * 8 / 1000000.0;
-        double mbs = bytes_per_sec / 1000000.0;
+        double mbs  = bytes_per_sec / 1000000.0;
         printf("%.2f Mbps  (%.2f MB/s)\n", mbps, mbs);
     } else {
         printf("N/A\n");
