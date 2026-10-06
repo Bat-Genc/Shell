@@ -46,7 +46,7 @@ static void show(const char *lbl, const char *cmd) {
     else printf("N/A\n");
 }
 
-// ===== Speed test (needs curl) =====
+// ===== Speed test helpers =====
 static double measure_speed(const char *cmd) {
     FILE *fp = popen(cmd, "r");
     if (!fp) return -1;
@@ -61,6 +61,10 @@ static void show_speedtest(void) {
     printf("  Speed Test (Cloudflare)\n");
     printf("  ----------------------------------------\n");
 
+    // ===== 1. DOWNLOAD (10 MB) =====
+    label("Download");
+    fflush(stdout);
+
 #ifdef _WIN32
     const char *dl_cmd =
         "C:/Windows/System32/curl.exe -s -o NUL -w \"%{speed_download}\" "
@@ -73,49 +77,97 @@ static void show_speedtest(void) {
         "https://speed.cloudflare.com/__down?bytes=10000000";
 #endif
 
-    // ===== Download =====
-    label("Download");
-    fflush(stdout);
     double dl_bps = measure_speed(dl_cmd);
     if (dl_bps > 0) {
-        printf("%.2f Mbps\n", (dl_bps * 8) / 1000000.0);
+        double mbps = (dl_bps * 8) / 1000000.0;
+        printf("%8.2f Mbps  (%.2f MB/s)\n", mbps, dl_bps / 1000000.0);
     } else {
         printf("N/A (curl missing or timeout)\n");
     }
 
-    // ===== Upload =====
+    // ===== 2. UPLOAD (5 MB) =====
     label("Upload");
     fflush(stdout);
 
+    double ul_bps = -1;
+
 #ifdef _WIN32
-    // Windows: use a temp file since /dev/zero doesn't exist
+    // Windows: create temp file with PowerShell, then upload
     const char *ul_cmd =
-        "C:/Windows/System32/curl.exe -s -o NUL -w \"%{speed_upload}\" "
-        "--max-time 30 "
-        "-X POST --data-binary \"12345678901234567890123456789012345678901234567890"
-        "12345678901234567890123456789012345678901234567890"
-        "12345678901234567890123456789012345678901234567890"
-        "12345678901234567890123456789012345678901234567890\" "
-        "https://speed.cloudflare.com/__up";
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+        "-NoProfile -Command "
+        "\"$tmp = [System.IO.Path]::GetTempFileName(); "
+        "fsutil file createnew $tmp 5000000 | Out-Null; "
+        "& C:/Windows/System32/curl.exe -s -o NUL -w '%{speed_upload}' "
+        "--max-time 30 -X POST --data-binary '@'+$tmp "
+        "https://speed.cloudflare.com/__up; "
+        "Remove-Item $tmp -Force\"";
 #else
     const char *ul_cmd =
         "dd if=/dev/zero bs=1048576 count=5 2>/dev/null | "
         "curl -s -o /dev/null -w \"%{speed_upload}\" "
-        "--max-time 30 "
-        "-X POST --data-binary @- "
+        "--max-time 30 -X POST --data-binary @- "
         "https://speed.cloudflare.com/__up";
 #endif
 
-    double ul_bps = measure_speed(ul_cmd);
+    ul_bps = measure_speed(ul_cmd);
     if (ul_bps > 0) {
-        printf("%.2f Mbps\n", (ul_bps * 8) / 1000000.0);
+        double mbps = (ul_bps * 8) / 1000000.0;
+        printf("%8.2f Mbps  (%.2f MB/s)\n", mbps, ul_bps / 1000000.0);
     } else {
-        printf("N/A (curl missing or timeout)\n");
+        printf("N/A (upload failed)\n");
     }
+
+    // ===== 3. PING (latency) =====
+    label("Ping");
+    fflush(stdout);
+
+#ifdef _WIN32
+    // Windows: use ping.exe
+    FILE *pf = popen(
+        "C:/Windows/System32/ping.exe -n 1 -w 5000 speed.cloudflare.com",
+        "r");
+    if (pf) {
+        char line[512];
+        double ms = -1;
+        while (fgets(line, sizeof(line), pf)) {
+            // Find "time=XXms" or "time<1ms"
+            char *p = strstr(line, "time=");
+            if (!p) p = strstr(line, "time<");
+            if (p) {
+                p = strchr(p, '=');
+                if (p) {
+                    p++;
+                    if (*p == '<') p++;
+                    ms = atof(p);
+                    break;
+                }
+            }
+        }
+        pclose(pf);
+        if (ms >= 0) printf("%8.2f ms\n", ms);
+        else         printf("N/A\n");
+    } else {
+        printf("N/A\n");
+    }
+#else
+    // Linux/macOS: use curl for latency (single small request)
+    const char *ping_cmd =
+        "curl -s -o /dev/null -w \"%{time_total}\" "
+        "--max-time 10 "
+        "https://speed.cloudflare.com/__down?bytes=1";
+    double t = measure_speed(ping_cmd);
+    if (t > 0) {
+        printf("%8.2f ms\n", t * 1000.0);
+    } else {
+        printf("N/A\n");
+    }
+#endif
+
+    printf("  ----------------------------------------\n");
 }
 
 // ===== Determine active connection type (Linux) =====
-// Returns: 0 = wifi, 1 = ethernet, -1 = unknown
 static int get_active_type(char *iface, size_t n) {
     iface[0] = '\0';
     FILE *fp = popen(
@@ -176,7 +228,7 @@ static int get_wifi_password(char *psk, size_t n) {
     return psk[0] ? 0 : -1;
 }
 
-// ===== Forward declaration =====
+// ===== Forward =====
 static void show_windows_ethernet(void);
 
 // ===== WINDOWS =====
@@ -332,24 +384,54 @@ static void show_windows_ethernet(void) {
     printf("Ethernet\n");
 
     FILE *fp = popen(
-        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get Speed /value 2>nul",
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe "
+        "-NoProfile -Command "
+        "\"Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | "
+        "Select-Object -First 1 -Property Name,LinkSpeed,MtuSize,MacAddress | "
+        "Format-List\"",
         "r");
+
     if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            char *p = strstr(line, "Speed=");
-            if (p) {
-                long long bps = atoll(p + 6);
-                label("Link Speed");
-                printf("%lld Mbps\n", bps / 1000000);
-                break;
-            }
+        char wl[512];
+        char speed[64] = "";
+        char mtu[32] = "";
+        char mac[64] = "";
+
+        while (fgets(wl, sizeof(wl), fp)) {
+            char *p = wl;
+            while (*p == ' ' || *p == '\t') p++;
+
+            char *colon = strchr(p, ':');
+            if (!colon) continue;
+            *colon = '\0';
+            char *key = p;
+            char *val = colon + 1;
+            while (*val == ' ') val++;
+
+            size_t len = strlen(val);
+            while (len > 0 && (val[len-1] == '\n' || val[len-1] == '\r' ||
+                               val[len-1] == ' '))
+                val[--len] = '\0';
+
+            len = strlen(key);
+            while (len > 0 && (key[len-1] == ' ' || key[len-1] == '\t'))
+                key[--len] = '\0';
+
+            if      (!strcmp(key, "LinkSpeed"))   strncpy(speed, val, sizeof(speed)-1);
+            else if (!strcmp(key, "MtuSize"))     strncpy(mtu, val, sizeof(mtu)-1);
+            else if (!strcmp(key, "MacAddress"))  strncpy(mac, val, sizeof(mac)-1);
         }
         pclose(fp);
+
+        if (speed[0]) { label("Link Speed"); printf("%s\n", speed); }
+        if (mtu[0])   { label("MTU");        printf("%s\n", mtu); }
+        if (mac[0])   { label("MAC");        printf("%s\n", mac); }
     }
 
+    // Duplex (fallback via wmic)
     fp = popen(
-        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" get FullDuplex /value 2>nul",
+        "C:/Windows/System32/wbem/WMIC.exe nic where \"NetConnectionStatus=2\" "
+        "get FullDuplex /value 2>nul",
         "r");
     if (fp) {
         char line[256];
@@ -363,10 +445,6 @@ static void show_windows_ethernet(void) {
         }
         pclose(fp);
     }
-
-    show("MTU",
-         "C:/Windows/System32/netsh.exe interface ipv4 show subinterfaces 2>nul | "
-         "findstr /R \"^ *[0-9]\" | awk \"NR==2{print \\$1}\"");
 }
 
 // ===== LINUX =====
