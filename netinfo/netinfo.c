@@ -47,7 +47,7 @@ static void show(const char *lbl, const char *cmd) {
 }
 
 // ===== Fix Cosmopolitan Windows paths =====
-// Cosmopolitan returns paths like "/C/Users/..." - convert to "C:/Users/..."
+// Cosmopolitan returns paths like "/C/Users/..." — convert to "C:/Users/..."
 static void fix_win_path(const char *in, char *out, size_t n) {
     if (in[0] == '/' && in[1] && in[2] == '/' &&
         ((in[1] >= 'A' && in[1] <= 'Z') || (in[1] >= 'a' && in[1] <= 'z'))) {
@@ -61,27 +61,32 @@ static void fix_win_path(const char *in, char *out, size_t n) {
         if (*p == '\\') *p = '/';
 }
 
-// ===== SPEED TEST (runtime OS detection) =====
+// =============================================================================
+// SPEED TEST
+// =============================================================================
 static void show_speedtest(void) {
     printf("  ----------------------------------------\n");
     printf("  Speed Test (Cloudflare)\n");
     printf("  ----------------------------------------\n");
 
+    // ---- Platform-specific curl path ----
     const char *curl;
     const char *null_dev;
 
     if (IsWindows()) {
-        curl = "C:/Windows/System32/curl.exe";
+        curl     = "C:/Windows/System32/curl.exe";
         null_dev = "NUL";
     } else {
-        curl = "curl";
+        curl     = "curl";
         null_dev = "/dev/null";
     }
 
     char cmd[4096];
     char buf[256];
 
-    // ===== Download test (25 MB) =====
+    // =========================================================================
+    // DOWNLOAD TEST (25 MB) — works on Windows, Linux, macOS
+    // =========================================================================
     label("Download");
     snprintf(cmd, sizeof(cmd),
              "%s -o %s -s -w \"%%{speed_download}\" "
@@ -95,12 +100,18 @@ static void show_speedtest(void) {
         printf("N/A\n");
     }
 
-    // ===== Upload test (5 MB) =====
+    // =========================================================================
+    // UPLOAD TEST (5 MB) — separate code for Windows vs Linux
+    // =========================================================================
     label("Upload");
 
     if (IsWindows()) {
-        // Windows: download a 5 MB file with curl.exe, then upload it back
-        // This avoids fsutil / PowerShell quoting problems entirely.
+        // =====================================================================
+        //  *** WINDOWS UPLOAD ***
+        //  Strategy: download a 5 MB file with curl.exe, then upload it back.
+        //  Why:  fsutil/PowerShell via system() fails on Windows due to
+        //        shell-quoting problems. curl.exe works reliably.
+        // =====================================================================
         char tmpdir[512];
         const char *tmp = getenv("TEMP");
         if (!tmp || !tmp[0]) tmp = getenv("TMP");
@@ -110,43 +121,44 @@ static void show_speedtest(void) {
         char tmpfile[1024];
         snprintf(tmpfile, sizeof(tmpfile), "%s/up_test.bin", tmpdir);
 
-        // 1. Download 5 MB (creates the file)
+        // --- Windows: step 1 — download 5 MB (creates the file) ---
         snprintf(cmd, sizeof(cmd),
                  "%s -o \"%s\" -s "
                  "\"https://speed.cloudflare.com/__down?bytes=5242880\"",
                  curl, tmpfile);
-        int rc = system(cmd);
+        system(cmd);
 
-        if (rc != 0) {
-            printf("N/A (could not create temp file)\n");
-        } else {
-            // 2. Upload it back
-            snprintf(cmd, sizeof(cmd),
-                     "%s -X POST -s -w \"%%{speed_upload}\" "
-                     "--data-binary \"@%s\" "
-                     "\"https://speed.cloudflare.com/__up\"",
-                     curl, tmpfile);
+        // --- Windows: step 2 — upload the file back ---
+        snprintf(cmd, sizeof(cmd),
+                 "%s -X POST -s -w \"%%{speed_upload}\" "
+                 "--data-binary \"@%s\" "
+                 "\"https://speed.cloudflare.com/__up\"",
+                 curl, tmpfile);
 
-            if (run(cmd, buf, sizeof(buf)) == 0) {
-                double bps = atof(buf);
-                if (bps > 0.0) {
-                    printf("%.2f Mbps  (%.2f MB/s)\n",
-                           bps * 8 / 1000000.0, bps / 1000000.0);
-                } else {
-                    printf("0.00 Mbps\n");
-                }
+        if (run(cmd, buf, sizeof(buf)) == 0) {
+            double bps = atof(buf);
+            if (bps > 0.0) {
+                printf("%.2f Mbps  (%.2f MB/s)\n",
+                       bps * 8 / 1000000.0, bps / 1000000.0);
             } else {
-                printf("N/A\n");
+                printf("0.00 Mbps\n");
             }
-
-            // 3. Delete temp file
-            snprintf(cmd, sizeof(cmd),
-                     "C:/Windows/System32/cmd.exe /c del /f /q \"%s\" 2>nul",
-                     tmpfile);
-            system(cmd);
+        } else {
+            printf("N/A\n");
         }
+
+        // --- Windows: step 3 — delete temp file ---
+        snprintf(cmd, sizeof(cmd),
+                 "C:/Windows/System32/cmd.exe /c del /f /q \"%s\" 2>nul",
+                 tmpfile);
+        system(cmd);
+
     } else {
-        // Linux: dd | curl
+        // =====================================================================
+        //  *** LINUX / macOS UPLOAD ***
+        //  Strategy: generate 5 MB of zeros with `dd`, pipe straight into curl.
+        //  Why:  dd + pipe works natively on Unix shells.
+        // =====================================================================
         snprintf(cmd, sizeof(cmd),
                  "dd if=/dev/zero bs=1M count=5 2>/dev/null | "
                  "%s -X POST -s -w \"%%{speed_upload}\" "
@@ -161,7 +173,9 @@ static void show_speedtest(void) {
         }
     }
 
-    // ===== Ping test =====
+    // =========================================================================
+    // PING TEST (1 byte download) — works on Windows, Linux, macOS
+    // =========================================================================
     label("Ping");
     snprintf(cmd, sizeof(cmd),
              "%s -o %s -s -w \"%%{time_total}\" "
@@ -176,7 +190,7 @@ static void show_speedtest(void) {
     }
 }
 
-// ===== Determine active connection type (Linux) =====
+// ===== Determine active connection type (Linux only) =====
 static int get_active_type(char *iface, size_t n) {
     iface[0] = '\0';
     FILE *fp = popen(
@@ -215,7 +229,7 @@ static int get_active_type(char *iface, size_t n) {
     return result;
 }
 
-// ===== WiFi password (Linux, needs sudo) =====
+// ===== WiFi password (Linux only, needs sudo) =====
 static int get_wifi_password(char *psk, size_t n) {
     psk[0] = '\0';
     FILE *fp = popen("LANG=C /usr/bin/nmcli -s dev wifi show-password 2>/dev/null", "r");
@@ -240,8 +254,11 @@ static int get_wifi_password(char *psk, size_t n) {
 // ===== Forward =====
 static void show_windows_ethernet(void);
 
-// ===== WINDOWS =====
+// =============================================================================
+// WINDOWS — System info + WiFi password
+// =============================================================================
 static void show_windows(int show_password) {
+    // --- Windows: IP, MAC, Gateway, DNS from ipconfig.exe /all ---
     FILE *fp = popen("C:/Windows/System32/ipconfig.exe /all", "r");
     if (fp) {
         char line[1024];
@@ -281,6 +298,7 @@ static void show_windows(int show_password) {
 
     printf("  ----------------------------------------\n");
 
+    // --- Windows: WiFi info from netsh.exe wlan show interfaces ---
     fp = popen("C:/Windows/System32/netsh.exe wlan show interfaces 2>nul", "r");
     if (!fp) {
         show_windows_ethernet();
@@ -335,6 +353,7 @@ static void show_windows(int show_password) {
     pclose(fp);
 
     if (ssid[0]) {
+        // --- Windows: WiFi connected, show details ---
         label("Connection");    printf("WiFi\n");
         label("SSID");          printf("%s\n", ssid);
         if (bssid[0])    { label("BSSID");          printf("%s\n", bssid); }
@@ -348,6 +367,7 @@ static void show_windows(int show_password) {
         if (auth[0])     { label("Authentication"); printf("%s\n", auth); }
         if (cipher[0])   { label("Cipher");         printf("%s\n", cipher); }
 
+        // --- Windows: WiFi password from netsh wlan show profile ---
         if (show_password) {
             label("Password");
             char cmd[512];
@@ -383,11 +403,14 @@ static void show_windows(int show_password) {
             printf("**********   (use -p to show)\n");
         }
     } else {
+        // --- Windows: no WiFi → fall back to Ethernet ---
         show_windows_ethernet();
     }
 }
 
-// ===== Windows Ethernet details =====
+// =============================================================================
+// WINDOWS — Ethernet details (via PowerShell Get-NetAdapter)
+// =============================================================================
 static void show_windows_ethernet(void) {
     label("Connection");
     printf("Ethernet\n");
@@ -438,8 +461,11 @@ static void show_windows_ethernet(void) {
     }
 }
 
-// ===== LINUX =====
+// =============================================================================
+// LINUX — System info + WiFi/Ethernet details + WiFi password
+// =============================================================================
 static void show_linux(int show_password, const char *prog) {
+    // --- Linux: IP and MAC via ip command ---
     show("IPv4 Address",
          "ip -4 -br addr show up scope global | grep -v 'docker\\|veth\\|lo' | awk '{print $3}' | cut -d/ -f1");
     show("IPv6 Address",
@@ -449,10 +475,14 @@ static void show_linux(int show_password, const char *prog) {
 
     printf("  ----------------------------------------\n");
 
+    // --- Linux: detect WiFi vs Ethernet via nmcli ---
     char iface[64] = "";
     int conn_type = get_active_type(iface, sizeof(iface));
 
     if (conn_type == 0) {
+        // =====================================================================
+        //  *** LINUX — WiFi ***
+        // =====================================================================
         char buf[2048] = "";
         int ok = -1;
         FILE *fp = popen("LANG=C /usr/bin/nmcli -t -f IN-USE,SSID,SIGNAL,RATE,CHAN,FREQ,SECURITY dev wifi 2>/dev/null", "r");
@@ -517,6 +547,7 @@ static void show_linux(int show_password, const char *prog) {
 
             int is_open = (!security[0] || !strcmp(security, "--"));
 
+            // --- Linux: WiFi password via nmcli (needs sudo) ---
             if (is_open) {
                 label("Password");
                 printf("(open network - no password)\n");
@@ -540,6 +571,9 @@ static void show_linux(int show_password, const char *prog) {
         }
 
     } else if (conn_type == 1) {
+        // =====================================================================
+        //  *** LINUX — Ethernet ***
+        // =====================================================================
         char cmd[256];
         label("Connection");  printf("Ethernet (%s)\n", iface);
 
@@ -569,11 +603,15 @@ static void show_linux(int show_password, const char *prog) {
         label("Connection");  printf("(unknown)\n");
     }
 
+    // --- Linux: Gateway + DNS ---
     printf("  ----------------------------------------\n");
     show("Default Route", "ip route | grep default | awk '{print $3}'");
     show("DNS", "cat /etc/resolv.conf | grep nameserver | awk '{print $2}'");
 }
 
+// =============================================================================
+// MAIN
+// =============================================================================
 int main(int argc, char *argv[]) {
     int show_password = 0;
     int show_speed    = 0;
@@ -592,6 +630,7 @@ int main(int argc, char *argv[]) {
             show_speed = 1;
     }
 
+    // --- Detect platform at runtime (Cosmopolitan magic) ---
     const char *platform = "Unknown";
     if (IsWindows())      platform = "Windows";
     else if (IsLinux())   platform = "Linux";
@@ -601,17 +640,19 @@ int main(int argc, char *argv[]) {
     printf("  Platform              %s\n", platform);
     printf("  ----------------------------------------\n");
 
+    // --- Dispatch to OS-specific handlers ---
     if (IsWindows()) {
-        show_windows(show_password);
+        show_windows(show_password);          // <-- WINDOWS path
     } else if (IsLinux()) {
-        show_linux(show_password, argv[0]);
+        show_linux(show_password, argv[0]);   // <-- LINUX path
     } else if (IsXnu()) {
+        // macOS (basic)
         show("IPv4 Address", "ifconfig | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}'");
         show("Hardware Address", "ifconfig | grep ether | awk '{print toupper($2)}'");
     }
 
     if (show_speed) {
-        show_speedtest();
+        show_speedtest();                     // <-- Speed test (OS-aware)
     }
 
     printf("\n");
