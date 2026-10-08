@@ -14,20 +14,27 @@
 #include <string.h>
 
 #define MAX_PROFILES 128
-#define NETSH "C:/Windows/System32/cmd.exe /c C:/Windows/System32/netsh.exe"
+#define NETSH "C:/Windows/System32/netsh.exe"
 
 // =============================================================================
 // Get all saved WiFi profile names.
 // Fills 'profiles[][128]', returns count.
 // =============================================================================
-static int get_profile_list(char profiles[][128], int max) {
+static int get_profile_list(char profiles[][128], int max) 
+{
     FILE *fp = popen(NETSH " wlan show profiles", "r");
     if (!fp) return 0;
 
     int count = 0;
     char line[512];
+    int service_down = 0;
 
     while (fgets(line, sizeof(line), fp)) {
+        // Detect service not running
+        if (strstr(line, "not running") || strstr(line, "not found")) {
+            service_down = 1;
+        }
+
         // Line format: "    All User Profile     : MyWiFi"
         char *p = strstr(line, "All User Profile");
         if (!p) continue;
@@ -37,7 +44,6 @@ static int get_profile_list(char profiles[][128], int max) {
         colon++;
         while (*colon == ' ' || *colon == '\t') colon++;
 
-        // Trim trailing whitespace
         size_t len = strlen(colon);
         while (len > 0 && (colon[len-1] == '\n' || colon[len-1] == '\r' ||
                            colon[len-1] == ' ' || colon[len-1] == '\t'))
@@ -50,9 +56,14 @@ static int get_profile_list(char profiles[][128], int max) {
         }
     }
     pclose(fp);
+
+    if (service_down) {
+        fprintf(stderr, "\n  ERROR: WiFi service (wlansvc) is not running.\n");
+        fprintf(stderr, "  Fix: run this in admin cmd:\n");
+        fprintf(stderr, "    net start wlansvc\n\n");
+    }
     return count;
 }
-
 // =============================================================================
 // Get password for one profile.
 // Returns 0 if password found, -1 otherwise (e.g. open network).
@@ -70,7 +81,6 @@ static int get_profile_password(const char *name, char *password, size_t n) {
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
-        // Line format: "    Key Content            : mypassword123"
         if (strstr(line, "Key Content")) {
             char *c = strchr(line, ':');
             if (c) {
@@ -90,7 +100,6 @@ static int get_profile_password(const char *name, char *password, size_t n) {
     pclose(fp);
     return -1;
 }
-
 // =============================================================================
 // MAIN
 // =============================================================================
