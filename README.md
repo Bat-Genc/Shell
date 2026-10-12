@@ -2,7 +2,7 @@ https://www.youtube.com/watch?v=a8tUtAJeHVg vid for change of open url
 in cmd name.com
 in shell ./name.com 
 
-net info 
+netinfo 
     base
     -p for passwotrd
     -s for speedtest
